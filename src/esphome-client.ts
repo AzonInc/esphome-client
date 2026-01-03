@@ -3114,6 +3114,13 @@ export class EspHomeClient extends EventEmitter {
     this.frameAndSend(MessageType.SUBSCRIBE_LOGS_REQUEST, payload);
   }
 
+  public subscribeToHomeAssistantServiceRequests(): void {
+
+    this.log.debug("Subscribing to Home Assistant service requests");
+
+    this.frameAndSend(MessageType.SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST, Buffer.alloc(0));
+  }
+
   /**
    * Handle device info response from the ESPHome device. This extracts all the device metadata from the response message.
    *
