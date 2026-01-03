@@ -121,6 +121,7 @@ This library provides complete support for the ESPHome native API protocol:
 - `EXECUTE_SERVICE_REQUEST` - Execute user-defined services
 - `GET_TIME_REQUEST` / `GET_TIME_RESPONSE` - Time synchronization
 - `SUBSCRIBE_LOGS_REQUEST` / `SUBSCRIBE_LOGS_RESPONSE` - Device log streaming
+- `SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST` / `HOMEASSISTANT_ACTION_REQUEST` - Home Assistant service requests
 
 #### Voice Assistant Support
 - `SUBSCRIBE_VOICE_ASSISTANT_REQUEST` - Voice assistant subscription
@@ -199,6 +200,9 @@ client.on('connect', ({ encrypted }) => {
   // Subscribe to device logs
   client.subscribeToLogs(LogLevel.INFO);
 
+  // Subscribe to home assistant service requests
+  client.subscribeToServiceRequests();
+
   // Log all discovered entities
   client.logAllEntityIds();
 });
@@ -212,6 +216,16 @@ client.on('entities', (entities) => {
 client.on('deviceInfo', (info) => {
   console.log(`Device: ${info.name} v${info.esphomeVersion}`);
   console.log(`Model: ${info.model}, MAC: ${info.macAddress}`);
+});
+
+// Listen for home assistant events
+client.on('event', (event) => {
+  console.log(`Event: ${event}`);
+});
+
+// Listen for home assistant action request
+client.on('actionRequest', (req) => {
+  console.log(`Action request: ${req}`);
 });
 
 // Connect to the device
