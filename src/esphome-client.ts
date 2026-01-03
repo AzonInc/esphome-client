@@ -3114,6 +3114,11 @@ export class EspHomeClient extends EventEmitter {
     this.frameAndSend(MessageType.SUBSCRIBE_LOGS_REQUEST, payload);
   }
 
+  /**
+   * Subscribe to Home Assistant service requests from the device.
+   * Sends a subscription request to receive notifications when the device
+   * requests Home Assistant service calls or fires events.
+   */
   public subscribeToHomeAssistantServiceRequests(): void {
 
     this.log.debug("Subscribing to Home Assistant service requests");
