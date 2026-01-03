@@ -481,6 +481,8 @@ enum MessageType {
   FAN_COMMAND_REQUEST                           = 31,
   LIGHT_COMMAND_REQUEST                         = 32,
   SWITCH_COMMAND_REQUEST                        = 33,
+  SUBSCRIBE_HOMEASSISTANT_SERVICES_REQUEST      = 34,
+  HOMEASSISTANT_ACTION_REQUEST                  = 35,
   GET_TIME_REQUEST                              = 36,
   GET_TIME_RESPONSE                             = 37,
   LIST_ENTITIES_SERVICES_RESPONSE               = 41,
@@ -576,6 +578,32 @@ export interface Entity {
   name: string;
   objectId: string;
   type: string;
+}
+
+/**
+ * Represents a key value pair.
+ */
+type KeyValuePair = { key: string; value: string };
+
+/**
+ * Represents a homeassistant event definition.
+ */
+interface HomeAssistantEventData {
+  event: string | undefined;
+  variables: KeyValuePair[];
+}
+
+/**
+ * Represents a homeassistant action request definition.
+ */
+interface HomeAssistantActionRequestData {
+  action: string | undefined;
+  data: KeyValuePair[];
+  data_template: KeyValuePair[];
+  variables: KeyValuePair[];
+  call_id: number | undefined;
+  wants_response: boolean;
+  response_template: string | undefined;
 }
 
 /**
@@ -2533,6 +2561,13 @@ export class EspHomeClient extends EventEmitter {
 
         break;
 
+      case MessageType.HOMEASSISTANT_ACTION_REQUEST:
+
+        // Process the log message response from the device.
+        this.handleHomeAssistantActionRequest(payload);
+
+        break;
+
       case MessageType.CAMERA_IMAGE_RESPONSE:
 
         // Process camera image response from the device. Camera images are sent as binary data with metadata.
@@ -2631,7 +2666,7 @@ export class EspHomeClient extends EventEmitter {
     }
 
     // Extract the optional send_failed flag from field 4. This indicates if there was an issue sending the log.
-    const sendFailed = this.extractNumberField(fields, 4) === 1;
+    const sendFailed = this.extractBoolField(fields, 4);
 
     // Create the log event data structure with all the extracted information.
     const logData: LogEventData = {
@@ -2646,6 +2681,49 @@ export class EspHomeClient extends EventEmitter {
 
     // Also log it through our internal logger at the appropriate level for debugging.
     this.log.debug("ESPHome Log [" + LogLevel[level] + "]: " + message);
+  }
+
+  /**
+   * Handle Home Assistant action request messages from the ESPHome device.
+   * This processes incoming requests to execute Home Assistant services or fire events,
+   * parsing the protobuf payload and emitting the appropriate event with structured data.
+   *
+   * @param payload - The protobuf-encoded payload containing either an event or action request.
+   *                  Events include: event name and variables.
+   *                  Actions include: service name, data, data templates, variables, call ID, and response settings.
+   */
+  private handleHomeAssistantActionRequest(payload: Buffer): void {
+
+    // Decode the protobuf fields from the payload.
+    const fields = this.decodeProtobuf(payload);
+
+    const is_event = this.extractBoolField(fields, 5) ?? false;
+
+    if(is_event) {
+      // Create the Home Assistant event data structure with all the extracted information.
+      const eventData: HomeAssistantEventData = {
+        event: this.extractStringField(fields, 1),
+        variables: this.extractKeyValuePairs(fields, 4) ?? []
+      };
+
+      this.log.debug("Received Home Assistant event");
+      this.emit("event", eventData);
+
+    } else {
+      // Create the Home Assistant action request data structure with all the extracted information.
+      const responseData: HomeAssistantActionRequestData = {
+        action: this.extractStringField(fields, 1),
+        data: this.extractKeyValuePairs(fields, 2) ?? [],
+        data_template: this.extractKeyValuePairs(fields, 3) ?? [],
+        variables: this.extractKeyValuePairs(fields, 4) ?? [],
+        call_id: this.extractNumberField(fields, 6),
+        wants_response: this.extractBoolField(fields, 7) ?? false,
+        response_template: this.extractStringField(fields, 8),
+      };
+      
+      this.log.debug("Received Home Assistant action request");
+      this.emit("actionRequest", responseData);
+    }
   }
 
   /**
@@ -2684,7 +2762,7 @@ export class EspHomeClient extends EventEmitter {
 
     // Extract the done flag from field 3 (bool done).
     // This indicates if this is the last packet for the current image.
-    const done = this.extractNumberField(fields, 3) === 1;
+    const done = this.extractBoolField(fields, 3);
 
     // Note: field 4 (device_id) is optional and not commonly used in single-device setups.
 
@@ -2732,7 +2810,7 @@ export class EspHomeClient extends EventEmitter {
     const fields = this.decodeProtobuf(payload);
 
     // Extract the success flag from field 1.
-    const success = this.extractNumberField(fields, 1) === 1;
+    const success = this.extractBoolField(fields, 1) ?? false;
 
     this.log.debug("Noise encryption key set response: " + (success ? "success" : "failed"));
 
@@ -2758,7 +2836,7 @@ export class EspHomeClient extends EventEmitter {
     const fields = this.decodeProtobuf(payload);
 
     // Extract the start flag from field 1.
-    const start = this.extractNumberField(fields, 1) === 1;
+    const start = this.extractBoolField(fields, 1);
 
     // Extract the conversation ID from field 2.
     const conversationId = this.extractStringField(fields, 2);
@@ -2811,7 +2889,7 @@ export class EspHomeClient extends EventEmitter {
     const fields = this.decodeProtobuf(payload);
 
     // Extract the success flag from field 1.
-    const success = this.extractNumberField(fields, 1) === 1;
+    const success = this.extractBoolField(fields, 1);
 
     // Emit the announce finished event.
     this.emit("voiceAssistantAnnounceFinished", success);
@@ -2926,7 +3004,7 @@ export class EspHomeClient extends EventEmitter {
     }
 
     // Extract end flag from field 2.
-    const end = this.extractNumberField(fields, 2) === 1;
+    const end = this.extractBoolField(fields, 2) ?? false;
 
     // Create the audio data event.
     const audioData: VoiceAssistantAudioData = { data, end };
@@ -3052,11 +3130,11 @@ export class EspHomeClient extends EventEmitter {
     const info: DeviceInfo = {};
 
     // Extract uses_password (field 1) - bool.
-    const usesPasswordValue = this.extractNumberField(fields, 1);
+    const usesPasswordValue = this.extractBoolField(fields, 1);
 
     if(usesPasswordValue !== undefined) {
 
-      info.usesPassword = usesPasswordValue === 1;
+      info.usesPassword = usesPasswordValue;
     }
 
     // Extract name (field 2) - string.
@@ -3075,11 +3153,11 @@ export class EspHomeClient extends EventEmitter {
     info.model = this.extractStringField(fields, 6);
 
     // Extract has_deep_sleep (field 7) - bool.
-    const hasDeepSleepValue = this.extractNumberField(fields, 7);
+    const hasDeepSleepValue = this.extractBoolField(fields, 7);
 
     if(hasDeepSleepValue !== undefined) {
 
-      info.hasDeepSleep = hasDeepSleepValue === 1;
+      info.hasDeepSleep = hasDeepSleepValue;
     }
 
     // Extract project_name (field 8) - string.
@@ -3116,11 +3194,11 @@ export class EspHomeClient extends EventEmitter {
     info.bluetoothMacAddress = this.extractStringField(fields, 18);
 
     // Extract api_encryption_supported (field 19) - bool.
-    const apiEncryptionValue = this.extractNumberField(fields, 19);
+    const apiEncryptionValue = this.extractBoolField(fields, 19);
 
     if(apiEncryptionValue !== undefined) {
 
-      info.apiEncryptionSupported = apiEncryptionValue === 1;
+      info.apiEncryptionSupported = apiEncryptionValue;
     }
 
     // Note: Fields 20-22 (devices, areas, area) are for more complex setups with multiple devices/areas.
@@ -3508,8 +3586,8 @@ export class EspHomeClient extends EventEmitter {
 
       case MessageType.BINARY_SENSOR_STATE_RESPONSE:
 
-        state = this.extractNumberField(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        state = this.extractBoolField(fields, 2);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3517,8 +3595,8 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
-          state: (typeof state === "number") ? (state === 1) : undefined,
+          missingState: missing,
+          state: state,
           type: "binary_sensor"
         };
 
@@ -3545,9 +3623,9 @@ export class EspHomeClient extends EventEmitter {
 
       case MessageType.FAN_STATE_RESPONSE: {
 
-        state = this.extractNumberField(fields, 2);
+        state = this.extractBoolField(fields, 2);
 
-        const oscillating = this.extractNumberField(fields, 3);
+        const oscillating = this.extractBoolField(fields, 3);
         const direction = this.extractNumberField(fields, 5);
         const speedLevel = this.extractNumberField(fields, 6);
         const presetMode = this.extractStringField(fields, 7);
@@ -3560,10 +3638,10 @@ export class EspHomeClient extends EventEmitter {
           direction,
           entity: name,
           key,
-          oscillating: (typeof oscillating === "number") ? (oscillating === 1) : undefined,
+          oscillating: oscillating,
           presetMode,
           speedLevel,
-          state: (typeof state === "number") ? (state === 1) : undefined,
+          state: state,
           type: "fan"
         };
 
@@ -3585,7 +3663,7 @@ export class EspHomeClient extends EventEmitter {
         // field 4: month (uint32)
         // field 5: day (uint32)
         // field 6: device_id (uint32)
-        missing = this.extractNumberField(fields, 2);
+        missing = this.extractBoolField(fields, 2);
 
         const year = this.extractNumberField(fields, 3);
         const month = this.extractNumberField(fields, 4);
@@ -3599,7 +3677,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           month,
           type: "date",
           year
@@ -3615,7 +3693,7 @@ export class EspHomeClient extends EventEmitter {
         // field 2: missing_state (bool)
         // field 3: epoch_seconds (fixed32)
         // field 4: device_id (uint32)
-        missing = this.extractNumberField(fields, 2);
+        missing = this.extractBoolField(fields, 2);
 
         // Extract epoch_seconds as fixed32 (4-byte unsigned integer).
         const epochSeconds = this.extractFixed32Field(fields, 3);
@@ -3628,7 +3706,7 @@ export class EspHomeClient extends EventEmitter {
           entity: name,
           epochSeconds,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           type: "datetime"
         };
 
@@ -3662,7 +3740,7 @@ export class EspHomeClient extends EventEmitter {
         state = this.extractNumberField(fields, 2);
 
         const volume = this.extractTelemetryValue(fields, 3);
-        const muted = this.extractNumberField(fields, 4);
+        const muted = this.extractBoolField(fields, 4);
 
         deviceId = this.extractNumberField(fields, 5);
 
@@ -3671,7 +3749,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          muted: (typeof muted === "number") ? (muted === 1) : undefined,
+          muted: muted,
           state,
           type: "media_player",
           volume: (typeof volume === "number") ? volume : undefined
@@ -3683,7 +3761,7 @@ export class EspHomeClient extends EventEmitter {
       case MessageType.NUMBER_STATE_RESPONSE:
 
         state = this.extractTelemetryValue(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3691,7 +3769,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           state: (typeof state === "number") ? state : undefined,
           type: "number"
         };
@@ -3701,7 +3779,7 @@ export class EspHomeClient extends EventEmitter {
       case MessageType.SELECT_STATE_RESPONSE:
 
         state = this.extractStringField(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3709,7 +3787,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           state,
           type: "select"
         };
@@ -3719,7 +3797,7 @@ export class EspHomeClient extends EventEmitter {
       case MessageType.SENSOR_STATE_RESPONSE:
 
         state = this.extractTelemetryValue(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3727,7 +3805,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           state: (typeof state === "number") ? state : undefined,
           type: "sensor"
         };
@@ -3736,7 +3814,7 @@ export class EspHomeClient extends EventEmitter {
 
       case MessageType.SIREN_STATE_RESPONSE:
 
-        state = this.extractNumberField(fields, 2);
+        state = this.extractBoolField(fields, 2);
         deviceId = this.extractNumberField(fields, 3);
 
         data = {
@@ -3744,7 +3822,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          state: (typeof state === "number") ? (state === 1) : undefined,
+          state: state,
           type: "siren"
         };
 
@@ -3752,7 +3830,7 @@ export class EspHomeClient extends EventEmitter {
 
       case MessageType.SWITCH_STATE_RESPONSE:
 
-        state = this.extractNumberField(fields, 2);
+        state = this.extractBoolField(fields, 2);
         deviceId = this.extractNumberField(fields, 3);
 
         data = {
@@ -3760,7 +3838,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          state: (typeof state === "number") ? (state === 1) : undefined,
+          state: state,
           type: "switch"
         };
 
@@ -3769,7 +3847,7 @@ export class EspHomeClient extends EventEmitter {
       case MessageType.TEXT_SENSOR_STATE_RESPONSE:
 
         state = this.extractStringField(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3777,7 +3855,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           state,
           type: "text_sensor"
         };
@@ -3787,7 +3865,7 @@ export class EspHomeClient extends EventEmitter {
       case MessageType.TEXT_STATE_RESPONSE:
 
         state = this.extractStringField(fields, 2);
-        missing = this.extractNumberField(fields, 3);
+        missing = this.extractBoolField(fields, 3);
         deviceId = this.extractNumberField(fields, 4);
 
         data = {
@@ -3795,7 +3873,7 @@ export class EspHomeClient extends EventEmitter {
           deviceId,
           entity: name,
           key,
-          missingState: typeof missing === "number" ? missing === 1 : undefined,
+          missingState: missing,
           state,
           type: "text"
         };
@@ -3811,7 +3889,7 @@ export class EspHomeClient extends EventEmitter {
         // field 4: minute (uint32)
         // field 5: second (uint32)
         // field 6: device_id (uint32)
-        missing = this.extractNumberField(fields, 2);
+        missing = this.extractBoolField(fields, 2);
 
         const hour = this.extractNumberField(fields, 3);
         const minute = this.extractNumberField(fields, 4);
@@ -3826,7 +3904,7 @@ export class EspHomeClient extends EventEmitter {
           hour,
           key,
           minute,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           second,
           type: "time"
         };
@@ -3836,10 +3914,10 @@ export class EspHomeClient extends EventEmitter {
 
       case MessageType.UPDATE_STATE_RESPONSE: {
 
-        missing = this.extractNumberField(fields, 2);
+        missing = this.extractBoolField(fields, 2);
 
-        const inProgress = this.extractNumberField(fields, 3);
-        const hasProgress = this.extractNumberField(fields, 4);
+        const inProgress = this.extractBoolField(fields, 3);
+        const hasProgress = this.extractBoolField(fields, 4);
         const progress = this.extractTelemetryValue(fields, 5);
         const currentVersion = this.extractStringField(fields, 6);
         const latestVersion = this.extractStringField(fields, 7);
@@ -3854,11 +3932,11 @@ export class EspHomeClient extends EventEmitter {
           currentVersion,
           deviceId,
           entity: name,
-          hasProgress: (typeof hasProgress === "number") ? (hasProgress === 1) : undefined,
-          inProgress: (typeof inProgress === "number") ? (inProgress === 1) : undefined,
+          hasProgress: hasProgress,
+          inProgress: inProgress,
           key,
           latestVersion,
-          missingState: (typeof missing === "number") ? (missing === 1) : undefined,
+          missingState: missing,
           progress: (typeof progress === "number") ? progress : undefined,
           releaseSummary,
           releaseUrl,
@@ -3942,7 +4020,7 @@ export class EspHomeClient extends EventEmitter {
     return {
 
       action: this.extractNumberField(fields, 8),
-      awayConfig: this.extractNumberField(fields, 7) === 1,
+      awayConfig: this.extractBoolField(fields, 7) === true,
       currentHumidity: this.extractTelemetryValue(fields, 14),
       currentTemperature: this.extractTelemetryValue(fields, 3),
       customFanMode: this.extractStringField(fields, 11),
@@ -3984,7 +4062,7 @@ export class EspHomeClient extends EventEmitter {
       entity: name,
       green: this.extractTelemetryValue(fields, 5) as number,
       red: this.extractTelemetryValue(fields, 4) as number,
-      state: this.extractNumberField(fields, 2) === 1,
+      state: this.extractBoolField(fields, 2) === true,
       type: eventType,
       warmWhite: this.extractTelemetryValue(fields, 13) as number,
       white: this.extractTelemetryValue(fields, 7) as number
@@ -4125,6 +4203,67 @@ export class EspHomeClient extends EventEmitter {
     const raw = fields[fieldNum]?.[0];
 
     return (typeof raw === "number") ? raw : undefined;
+  }
+
+  /**
+   * Extract a boolean field from decoded protobuf fields.
+   * Boolean fields are encoded as varints (0 = false, 1 = true).
+   *
+   * @param fields - The decoded protobuf fields.
+   * @param fieldNum - The field number to extract.
+   * @returns The boolean value or undefined if not found.
+   */
+  private extractBoolField(fields: Record<number, FieldValue[]>, fieldNum: number): boolean | undefined {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+      const raw = fields[fieldNum]?.[0];
+      return (typeof raw === "number") ? raw === 1 : undefined;
+  }
+
+  /**
+   * Parse a single key-value pair buffer.
+   */
+  private parseKeyValuePair(rawBuf: FieldValue): KeyValuePair {
+      if (!Buffer.isBuffer(rawBuf)) {
+          return { key: '', value: '' };
+      }
+
+      const result = { key: '', value: '' };
+      let offset = 0;
+      
+      while (offset < rawBuf.length) {
+          const fieldTag = rawBuf[offset++];
+          
+          if (fieldTag === 0x0a) { // Field 1: key (wire type 2 = length-delimited)
+              const keyLen = rawBuf[offset++];
+              result.key = rawBuf.slice(offset, offset + keyLen).toString('utf8');
+              offset += keyLen;
+          } else if (fieldTag === 0x12) { // Field 2: value (wire type 2 = length-delimited)
+              const valueLen = rawBuf[offset++];
+              result.value = rawBuf.slice(offset, offset + valueLen).toString('utf8');
+              offset += valueLen;
+          } else {
+              break;
+          }
+      }
+      return result;
+  }
+
+  /**
+   * Extract and parse all key-value pairs from a protobuf message field.
+   * Parses the embedded protobuf structures containing keys and values,
+   * both encoded as length-delimited strings.
+   *
+   * @param fields - The decoded protobuf fields.
+   * @param fieldNum - The field number to extract.
+   * @returns An array of objects with 'key' and 'value' properties, or empty array if not found.
+   */
+  private extractKeyValuePairs(fields: Record<number, FieldValue[]>, fieldNum: number): KeyValuePair[] | undefined {
+      const rawBuffers = fields[fieldNum];
+      if (!rawBuffers || !Array.isArray(rawBuffers)) {
+          return undefined;
+      }
+
+      return rawBuffers.map(rawBuf => this.parseKeyValuePair(rawBuf));
   }
 
   /**
