@@ -1313,6 +1313,7 @@ export declare class EspHomeClient extends EventEmitter {
      * ```
      */
     subscribeToLogs(level?: LogLevel, dumpConfig?: boolean): void;
+    subscribeToHomeAssistantServiceRequests(): void;
     /**
      * Handle device info response from the ESPHome device. This extracts all the device metadata from the response message.
      *
